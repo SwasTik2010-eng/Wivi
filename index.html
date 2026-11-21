@@ -126,7 +126,7 @@
             <h1 class="font-bold text-slate-100 text-base leading-tight tracking-wide" id="appTitleText">Aura Chat</h1>
             <div class="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span id="modelStatusText">Gemini 2.5 Flash</span>
+              <span id="modelStatusText">Gemini 3.8 Flash</span>
             </div>
           </div>
         </div>
@@ -361,7 +361,7 @@
         </div>
         <div class="flex items-center justify-between max-w-4xl mx-auto mt-2 text-[11px] text-slate-500 px-2">
           <span id="charCounter">0 chars</span>
-          <span>Powered by Gemini 3 Flash</span>
+          <span>Powered by Gemini 3.8 Flash</span>
         </div>
       </footer>
 
@@ -702,7 +702,7 @@
       // Use empty string key when in Preview so runtime injects the key automatically,
       // or use the user's saved key when hosted externally (e.g., GitHub Pages).
       const apiKey = state.apiKey ? state.apiKey.trim() : "";
-      const model = apiKey ? "gemini-2.5-flash" : "gemini-3-flash-preview";
+      const model = apiKey ? "gemini-3.8-flash" : "gemini-3-flash-preview";
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
       const payload = {
