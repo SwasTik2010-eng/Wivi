@@ -176,7 +176,7 @@
           </div>
 
           <div class="relative flex items-center">
-            <input type="password" id="apiKeyInput" placeholder="Paste your AIza... key"
+            <input type="password" id="apiKeyInput" placeholder="Paste your AIza... or AQ... key"
               class="w-full bg-surface-950 border border-slate-700 rounded-lg py-2 pl-3 pr-10 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent transition-colors"
               oninput="handleApiKeyChange()" />
             <button type="button" onclick="togglePasswordVisibility()" class="absolute right-2 text-slate-400 hover:text-white p-1 text-xs">
@@ -185,12 +185,15 @@
           </div>
 
           <div class="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
-            <span>Needed for live response</span>
+            <button type="button" onclick="testApiKey()" id="testKeyBtn" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors">
+              Test Key
+            </button>
             <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="text-accent hover:underline flex items-center gap-1 font-medium">
-              <span>Get Free Key</span>
+              <span>Get API Key</span>
               <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
             </a>
           </div>
+          <p id="apiKeyTestResult" class="text-[11px] hidden pt-1"></p>
         </div>
 
         <!-- Assistant Name -->
@@ -445,7 +448,60 @@
       const keyVal = document.getElementById('apiKeyInput').value.trim();
       state.apiKey = keyVal;
       localStorage.setItem('wivi_api_key', keyVal);
+      const resultEl = document.getElementById('apiKeyTestResult');
+      if (resultEl) resultEl.classList.add('hidden');
       checkApiKeyStatus();
+    }
+
+    async function testApiKey() {
+      const resultEl = document.getElementById('apiKeyTestResult');
+      const btn = document.getElementById('testKeyBtn');
+      const key = (state.apiKey || '').trim();
+
+      resultEl.classList.remove('hidden');
+
+      if (!key) {
+        resultEl.className = 'text-[11px] text-amber-300 pt-1';
+        resultEl.textContent = 'Please paste a key first.';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Testing...';
+      resultEl.className = 'text-[11px] text-slate-400 pt-1';
+      resultEl.textContent = 'Checking key with Google Gemini...';
+
+      try {
+        // Test using x-goog-api-key header (supports both AIza... and AQ... keys)
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+          headers: { 'x-goog-api-key': key }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          resultEl.className = 'text-[11px] text-emerald-400 pt-1';
+          resultEl.textContent = '✓ Key is valid and active!';
+        } else {
+          // Fallback test on Vertex AI Express endpoint for AQ. keys
+          const vRes = await fetch('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'hi' }] }] })
+          });
+          if (vRes.ok) {
+            resultEl.className = 'text-[11px] text-emerald-400 pt-1';
+            resultEl.textContent = '✓ Vertex Express (AQ.) Key is valid!';
+          } else {
+            resultEl.className = 'text-[11px] text-rose-400 pt-1';
+            resultEl.textContent = `✗ ${data.error?.message || 'API key rejected by Google.'}`;
+          }
+        }
+      } catch (e) {
+        resultEl.className = 'text-[11px] text-rose-400 pt-1';
+        resultEl.textContent = `✗ Network error: ${e.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Test Key';
+      }
     }
 
     function checkApiKeyStatus() {
@@ -702,8 +758,10 @@
       // Use empty string key when in Preview so runtime injects the key automatically,
       // or use the user's saved key when hosted externally (e.g., GitHub Pages).
       const apiKey = state.apiKey ? state.apiKey.trim() : "";
-      const model = apiKey ? "gemini-3.8-flash" : "gemini-3-flash-preview";
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+      const candidateModels = apiKey
+        ? ["gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.0-flash"]
+        : ["gemini-3-flash-preview"];
 
       const payload = {
         contents: contents,
@@ -712,40 +770,73 @@
         }
       };
 
+      // Build candidate endpoints: standard Gemini API (with header) + Vertex Express fallback for AQ. keys
+      const endpoints = [];
+      for (const model of candidateModels) {
+        if (!apiKey) {
+          endpoints.push({
+            url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=`,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        } else {
+          endpoints.push({
+            url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }
+          });
+          if (apiKey.startsWith('AQ.')) {
+            endpoints.push({
+              url: `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent`,
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }
+            });
+          }
+        }
+      }
+
       const delays = [1000, 2000, 4000];
       let lastError = null;
 
-      for (let attempt = 0; attempt <= delays.length; attempt++) {
-        try {
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
+      for (const ep of endpoints) {
+        for (let attempt = 0; attempt <= delays.length; attempt++) {
+          try {
+            const res = await fetch(ep.url, {
+              method: 'POST',
+              headers: ep.headers,
+              body: JSON.stringify(payload)
+            });
 
-          if (!res.ok) {
-            const errorData = await res.json().catch(() => ({}));
-            const msg = errorData.error?.message || `HTTP ${res.status} ${res.statusText}`;
-            if (res.status === 429 && attempt < delays.length) {
-              await new Promise(r => setTimeout(r, delays[attempt]));
-              continue;
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              const msg = errorData.error?.message || `HTTP ${res.status} ${res.statusText}`;
+
+              // If model or endpoint isn't found/supported for this key, try the next candidate
+              if (res.status === 404 || res.status === 400 || res.status === 403 || msg.toLowerCase().includes('no longer available') || msg.toLowerCase().includes('not found')) {
+                lastError = new Error(msg);
+                break;
+              }
+
+              if (res.status === 429 && attempt < delays.length) {
+                await new Promise(r => setTimeout(r, delays[attempt]));
+                continue;
+              }
+              throw new Error(msg);
             }
-            throw new Error(msg);
-          }
 
-          const data = await res.json();
-          const candidate = data.candidates?.[0];
-          const reply = candidate?.content?.parts?.[0]?.text;
+            const data = await res.json();
+            const candidate = data.candidates?.[0];
+            const reply = candidate?.content?.parts?.[0]?.text;
 
-          if (!reply) {
-            throw new Error('No text response received from Gemini API.');
-          }
+            if (!reply) {
+              throw new Error('No text response received from Gemini API.');
+            }
 
-          return reply;
-        } catch (err) {
-          lastError = err;
-          if (attempt < delays.length) {
-            await new Promise(r => setTimeout(r, delays[attempt]));
+            return reply;
+          } catch (err) {
+            lastError = err;
+            if (attempt < delays.length && !err.message.includes('API key')) {
+              await new Promise(r => setTimeout(r, delays[attempt]));
+            } else {
+              break;
+            }
           }
         }
       }
